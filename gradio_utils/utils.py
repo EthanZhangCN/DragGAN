@@ -13,20 +13,31 @@ class ImageMask(gr.components.Image):
     def __init__(self, **kwargs):
         super().__init__(source="upload",
                          tool="sketch",
-                         interactive=False,
+                         interactive=True,
                          **kwargs)
 
     def preprocess(self, x):
         if x is None:
             return x
         if self.tool == "sketch" and self.source in ["upload", "webcam"
-                                                     ] and type(x) != dict:
-            decode_image = gr.processing_utils.decode_base64_to_image(x)
-            width, height = decode_image.size
-            mask = np.ones((height, width, 4), dtype=np.uint8)
-            mask[..., -1] = 255
-            mask = self.postprocess(mask)
-            x = {'image': x, 'mask': mask}
+                                                     ] :
+            if type(x) != dict:
+                decode_image = gr.processing_utils.decode_base64_to_image(x)
+                width, height = decode_image.size
+                mask = np.ones((height, width, 4), dtype=np.uint8)
+                mask[..., -1] = 255
+                mask = self.postprocess(mask)
+                x = {'image': x, 'mask': mask}
+            else:
+                decode_image = gr.processing_utils.decode_base64_to_image(x['image'])
+                decode_image= decode_image.resize([1024,1024])
+                width, height = decode_image.size
+                mask = np.ones((height, width, 4), dtype=np.uint8)
+                mask[..., -1] = 255
+                mask = self.postprocess(mask)
+
+                x = {'image': x['image'], 'mask': mask}
+            
         return super().preprocess(x)
 
 

@@ -7,7 +7,7 @@ import gradio as gr
 import numpy as np
 import torch
 from PIL import Image
-
+from torch_utils.pti import run_PTI,export_updated_pickle
 import dnnlib
 from gradio_utils import (ImageMask, draw_mask_on_image, draw_points_on_image,
                           get_latest_points_pair, get_valid_mask,
@@ -15,19 +15,13 @@ from gradio_utils import (ImageMask, draw_mask_on_image, draw_points_on_image,
 from viz.renderer import Renderer, add_watermark_np
 
 parser = ArgumentParser()
-parser.add_argument('--share', action='store_true',default='True')
+parser.add_argument('--share', action='store_true')
 parser.add_argument('--cache-dir', type=str, default='./checkpoints')
-parser.add_argument(
-    "--listen",
-    action="store_true",
-    help="launch gradio with 0.0.0.0 as server name, allowing to respond to network requests",
-)
 args = parser.parse_args()
 
 cache_dir = args.cache_dir
 
 device = 'cuda'
-
 
 def reverse_point_pairs(points):
     new_points = []
@@ -58,7 +52,7 @@ def clear_state(global_state, target=None):
     return global_state
 
 
-def init_images(global_state):
+def init_images(global_state,w_load=None):
     """This function is called only ones with Gradio App is started.
     0. pre-process global_state, unpack value from global_state of need
     1. Re-init renderer
@@ -71,12 +65,11 @@ def init_images(global_state):
         state = global_state.value
     else:
         state = global_state
-
     state['renderer'].init_network(
         state['generator_params'],  # res
         valid_checkpoints_dict[state['pretrained_weight']],  # pkl
         state['params']['seed'],  # w0_seed,
-        None,  # w_load
+        w_load,  # w_load
         state['params']['latent_space'] == 'w+',  # w_plus
         'const',
         state['params']['trunc_psi'],  # trunc_psi,
@@ -88,7 +81,6 @@ def init_images(global_state):
     state['renderer']._render_drag_impl(state['generator_params'],
                                         is_drag=False,
                                         to_pil=True)
-
     init_image = state['generator_params'].image
     state['images']['image_orig'] = init_image
     state['images']['image_raw'] = init_image
@@ -161,7 +153,7 @@ print(os.listdir(cache_dir))
 print('Valid checkpoint file:')
 print(valid_checkpoints_dict)
 
-init_pkl = 'stylegan2_lions_512_pytorch'
+init_pkl = 'stylegan_human_v2_512'
 
 with gr.Blocks() as app:
 
@@ -309,6 +301,8 @@ with gr.Blocks() as app:
                     brush_radius=20).style(
                         width=768,
                         height=768)  # NOTE: hard image size code here.
+                
+    
     gr.Markdown("""
         ## Quick Start
 
@@ -370,12 +364,31 @@ with gr.Blocks() as app:
         1. Re-init images
         2. Clear all states
         """
-
         init_images(global_state)
         clear_state(global_state)
 
         return global_state, global_state['images']['image_show']
+    import pdb
+    def on_image_change(image,global_state):
+       
+        new_img = Image.fromarray(image['image'])
+        # global_state['images']['image_show'] = new_img
+        # global_state['images']['image_orig'] = new_img
+        # global_state['images']['image_raw'] = new_img
 
+        new_G,w_pivot = run_PTI(new_img,use_wandb=False, use_multi_id_training=False)
+        custom_name = 'stylegan2_custom_512_pytorch'
+        out_path = f'checkpoints/{custom_name}.pkl'
+        export_updated_pickle(new_G,out_path)
+
+        global_state['pretrained_weight'] = custom_name
+        # w_pivot = torch.load('PTI/embeddings/barcelona/PTI/customIMG/0.pt')
+        init_images(global_state,w_pivot)
+        clear_state(global_state)
+    
+        return global_state,global_state["images"]['image_show']
+    
+    form_image.upload(on_image_change, [form_image,global_state], [global_state,form_image])
     form_reset_image.click(
         on_click_reset_image,
         inputs=[global_state],
@@ -388,7 +401,6 @@ with gr.Blocks() as app:
         1. Set seed to global_state
         2. Re-init images and clear all states
         """
-
         global_state["params"]["seed"] = int(seed)
         init_images(global_state)
         clear_state(global_state)
@@ -447,7 +459,14 @@ with gr.Blocks() as app:
         p_in_pixels = []
         t_in_pixels = []
         valid_points = []
-
+        # import pdb
+        # pdb.set_trace()
+        # from PIL import Image
+        # test = Image.open('test/test.png')
+        # global_state['images']['image_orig'] = test
+        # global_state['images']['image_raw'] = test
+        # global_state['images']['image_show'] = test
+        
         # handle of start drag in mask editing mode
         global_state = preprocess_mask_info(global_state, image)
 
@@ -676,11 +695,11 @@ with gr.Blocks() as app:
         """
         global_state["temporal_params"]["stop"] = True
 
-        return global_state, gr.Button.update(interactive=False)
+        return global_state, gr.Button.update(interactive=False),gr.Image.update(interactive=True)
 
     form_stop_btn.click(on_click_stop,
                         inputs=[global_state],
-                        outputs=[global_state, form_stop_btn])
+                        outputs=[global_state, form_stop_btn,form_image])
 
     form_draw_interval_number.change(
         partial(
@@ -867,5 +886,5 @@ with gr.Blocks() as app:
     )
 
 gr.close_all()
-app.queue(concurrency_count=3, max_size=20)
-app.launch(share=args.share, server_name="0.0.0.0" if args.listen else "127.0.0.1")
+app.queue(concurrency_count=5, max_size=20)
+app.launch(share=args.share)
